@@ -7,7 +7,10 @@ const translationModel = '@cf/meta/m2m100-1.2b' as const;
 const textGenerationModel = '@cf/meta/llama-3.3-70b-instruct-fp8-fast' as const;
 
 type BatchModel = typeof translationModel | typeof textGenerationModel;
-type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+// Non-recursive JSON type: a self-referential index signature (e.g. `{ [key: string]: JsonValue }`)
+// makes Hono's `JSONParsed<T>` recurse without bound and trips TS2589 in `c.json()`.
+type JsonObject = { [key: string]: unknown };
+type JsonValue = null | boolean | number | string | unknown[] | JsonObject;
 type TranslationBatchRequest = AiTranslationInput & { external_reference?: string };
 type TextGenerationBatchRequest = AiTextGenerationInput & { external_reference?: string };
 
