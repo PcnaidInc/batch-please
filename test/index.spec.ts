@@ -6,10 +6,8 @@ describe('Hello World user worker', () => {
 	describe('request for /message', () => {
 		it('/ responds with "Hello, World!" (unit style)', async () => {
 			const request = new Request<unknown, IncomingRequestCfProperties>('http://example.com/message');
-			// Create an empty context to pass to `worker.fetch()`.
 			const ctx = createExecutionContext();
 			const response = await worker.fetch(request, env, ctx);
-			// Wait for all `Promise`s passed to `ctx.waitUntil()` to settle before running test assertions
 			await waitOnExecutionContext(ctx);
 			expect(await response.text()).toMatchInlineSnapshot(`"Hello, World!"`);
 		});
@@ -24,10 +22,8 @@ describe('Hello World user worker', () => {
 	describe('request for /random', () => {
 		it('/ responds with a random UUID (unit style)', async () => {
 			const request = new Request<unknown, IncomingRequestCfProperties>('http://example.com/random');
-			// Create an empty context to pass to `worker.fetch()`.
 			const ctx = createExecutionContext();
 			const response = await worker.fetch(request, env, ctx);
-			// Wait for all `Promise`s passed to `ctx.waitUntil()` to settle before running test assertions
 			await waitOnExecutionContext(ctx);
 			expect(await response.text()).toMatch(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/);
 		});
@@ -37,5 +33,39 @@ describe('Hello World user worker', () => {
 			const response = await SELF.fetch(request);
 			expect(await response.text()).toMatch(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/);
 		});
+	});
+});
+
+describe('/check-request', () => {
+	it('returns 400 when id query param is missing', async () => {
+		const request = new Request<unknown, IncomingRequestCfProperties>('http://example.com/check-request');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(400);
+		const body = await response.json<{ error: string }>();
+		expect(body.error).toBe('A valid request id and batch model are required');
+	});
+
+	it('returns 400 when model query param is missing', async () => {
+		const request = new Request<unknown, IncomingRequestCfProperties>('http://example.com/check-request?id=abc123');
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(400);
+		const body = await response.json<{ error: string }>();
+		expect(body.error).toBe('A valid request id and batch model are required');
+	});
+
+	it('returns 400 when model is not a recognised batch model', async () => {
+		const request = new Request<unknown, IncomingRequestCfProperties>(
+			'http://example.com/check-request?id=abc123&model=@cf/meta/unknown-model'
+		);
+		const ctx = createExecutionContext();
+		const response = await worker.fetch(request, env, ctx);
+		await waitOnExecutionContext(ctx);
+		expect(response.status).toBe(400);
+		const body = await response.json<{ error: string }>();
+		expect(body.error).toBe('A valid request id and batch model are required');
 	});
 });
