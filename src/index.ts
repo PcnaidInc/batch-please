@@ -3,9 +3,70 @@ import { env } from 'cloudflare:workers';
 
 const app = new Hono<{ Bindings: Env }>();
 
+const translationModel = '@cf/meta/m2m100-1.2b' as const;
+const textGenerationModel = '@cf/meta/llama-3.3-70b-instruct-fp8-fast' as const;
+
+type BatchModel = typeof translationModel | typeof textGenerationModel;
+// Non-recursive JSON type: a self-referential index signature (e.g. `{ [key: string]: JsonValue }`)
+// makes Hono's `JSONParsed<T>` recurse without bound and trips TS2589 in `c.json()`.
+type JsonObject = { [key: string]: unknown };
+type JsonValue = null | boolean | number | string | unknown[] | JsonObject;
+type TranslationBatchRequest = AiTranslationInput & { external_reference?: string };
+type TextGenerationBatchRequest = AiTextGenerationInput & { external_reference?: string };
+
+interface UserProfile {
+	username: string;
+	profileStatus: string;
+}
+
+interface BatchAi {
+	run(
+		model: typeof translationModel,
+		inputs: { requests: TranslationBatchRequest[] },
+		options: { queueRequest: true }
+	): Promise<{ [key: string]: JsonValue }>;
+	run(
+		model: typeof textGenerationModel,
+		inputs: { requests: TextGenerationBatchRequest[] },
+		options: { queueRequest: true }
+	): Promise<{ [key: string]: JsonValue }>;
+	run(model: BatchModel, inputs: { request_id: string }): Promise<JsonValue>;
+}
+
+// The runtime supports batching before Wrangler's generated Ai type exposes the Batch API shapes.
+function asBatchAi(ai: Env['AI']): BatchAi {
+	return ai as unknown as BatchAi;
+}
+
+function isBatchModel(model: string | undefined): model is BatchModel {
+	return model === translationModel || model === textGenerationModel;
+}
+
+function isStringArray(value: unknown): value is string[] {
+	return Array.isArray(value) && value.every((item: unknown) => typeof item === 'string');
+}
+
+function getCompanies(result: unknown): string[] {
+	if (typeof result !== 'object' || result === null || !('response' in result)) {
+		return [];
+	}
+
+	const response = result.response;
+	if (typeof response !== 'object' || response === null || !('companies' in response)) {
+		return [];
+	}
+
+	const companies = response.companies;
+	return isStringArray(companies) ? companies : [];
+}
+
+app.get('/message', (c) => c.text('Hello, World!'));
+
+app.get('/random', (c) => c.text(crypto.randomUUID()));
+
 app.get('/example/single', async (c) => {
 	// Uses the AI binding to run a single request
-	const response = await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
+	const response = await env.AI.run(textGenerationModel, {
 		prompt: "What's that song that goes 'all the single ladies'?",
 	});
 	return c.json({ response });
@@ -13,32 +74,32 @@ app.get('/example/single', async (c) => {
 
 app.post('/example/batch', async (c) => {
 	// This payload contains an array called `queries`
-	const payload = await c.req.json();
+	const payload = await c.req.json<{ queries: string[] }>();
 
 	// Map to the required format
-	const requests = payload.queries.map((q: string) => {
+	const requests = payload.queries.map<TranslationBatchRequest>((q) => {
 		return {
 			text: q,
 			target_lang: 'es',
 		};
 	});
-	const response = await env.AI.run(
-		'@cf/meta/m2m100-1.2b',
+	const response = await asBatchAi(env.AI).run(
+		translationModel,
 		{
 			requests,
 		},
 		{ queueRequest: true }
 	);
-	return c.json({ response, model: '@cf/meta/m2m100-1.2b' });
+	return c.json({ response, model: translationModel });
 });
 
 app.post('/example/batch/with-reference', async (c) => {
-	const payload = await c.req.json();
+	const payload = await c.req.json<{ users: UserProfile[] }>();
 	// This uses an external reference
 	// Oftentimes your request will have an external_reference/identifier
 	// that you will want to sync up with the results.
 
-	const requests = payload.users.map((user) => {
+	const requests = payload.users.map<TranslationBatchRequest>((user) => {
 		return {
 			text: user.profileStatus,
 			source_lang: 'en',
@@ -46,23 +107,23 @@ app.post('/example/batch/with-reference', async (c) => {
 			external_reference: user.username,
 		};
 	});
-	const response = await env.AI.run(
-		'@cf/meta/m2m100-1.2b',
+	const response = await asBatchAi(env.AI).run(
+		translationModel,
 		{
 			requests,
 		},
 		{ queueRequest: true }
 	);
-	return c.json({ response, model: '@cf/meta/m2m100-1.2b' });
+	return c.json({ response, model: translationModel });
 });
 
 app.post('/example/batch/extract', async (c) => {
-	const payload = await c.req.json();
+	const payload = await c.req.json<{ users: UserProfile[] }>();
 	// This uses an external reference
 	// Oftentimes your request will have an external_reference/identifier
 	// that you will want to sync up with the results.
 
-	const requests = payload.users.map((user) => {
+	const requests = payload.users.map<TextGenerationBatchRequest>((user) => {
 		return {
 			prompt: `Extract the company names that are present in the following profile status: ${user.profileStatus}`,
 			external_reference: user.username,
@@ -85,14 +146,14 @@ app.post('/example/batch/extract', async (c) => {
 		};
 	});
 	console.log({ requests });
-	const response = await env.AI.run(
-		'@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+	const response = await asBatchAi(env.AI).run(
+		textGenerationModel,
 		{
 			requests,
 		},
 		{ queueRequest: true }
 	);
-	return c.json({ response, model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast'});
+	return c.json({ response, model: textGenerationModel });
 });
 
 app.get('/sus', async (c) => {
@@ -261,7 +322,7 @@ app.get('/sus', async (c) => {
 	console.log("checking users", users);
 	const results = [];
 	for (const user of users) {
-		const result = await c.env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
+		const result = await c.env.AI.run(textGenerationModel, {
 			prompt: `Extract the company names that are present in the following profile status: ${user.profileStatus}`,
 			response_format: {
 				type: 'json_schema',
@@ -280,9 +341,10 @@ app.get('/sus', async (c) => {
 				},
 			},
 		});
-		if (result.response.companies.length > 0) {
+		const companies = getCompanies(result);
+		if (companies.length > 0) {
 			console.log('sus');
-			console.log({ user, companies: result.response.companies });
+			console.log({ user, companies });
 			results.push(result);
 		}
 	}
@@ -291,7 +353,7 @@ app.get('/sus', async (c) => {
 
 // Helper method to generate examples
 app.get('/generate/sentences', async (c) => {
-	const results = await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
+	const results = await env.AI.run(textGenerationModel, {
 		prompt: 'Generate 10 common phrases that someone might ask to be translated',
 		response_format: {
 			type: 'json_schema',
@@ -315,7 +377,7 @@ app.get('/generate/sentences', async (c) => {
 
 // Helper method to generate examples
 app.get('/generate/users', async (c) => {
-	const results = await env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
+	const results = await env.AI.run(textGenerationModel, {
 		prompt: 'Generate 10 business users each with a profile status',
 		response_format: {
 			type: 'json_schema',
@@ -351,8 +413,11 @@ app.get('/check-request', async (c) => {
 	const id = c.req.query('id');
 	const model = c.req.query('model');
 	console.log({ id });
+	if (!id || !isBatchModel(model)) {
+		return c.json({ error: 'A valid request id and batch model are required' }, 400);
+	}
 	// Use this pattern to poll for your async response status
-	const response = await env.AI.run(model, {
+	const response = await asBatchAi(env.AI).run(model, {
 		request_id: id,
 	});
 	return c.json(response);

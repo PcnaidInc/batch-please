@@ -4,7 +4,8 @@ export default defineWorkersConfig({
 	test: {
 		poolOptions: {
 			workers: {
-				wrangler: { configPath: './wrangler.jsonc' },
+				// The local pool cannot resolve the production Workers AI binding.
+				wrangler: { configPath: './wrangler.test.jsonc' },
 			},
 		},
 	},

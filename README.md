@@ -18,6 +18,10 @@ npm install
 npm run dev
 ```
 
+## CI
+
+This project uses GitHub Actions to typecheck (via `tsc --noEmit`) and run tests (via `vitest`) on pull requests and pushes to `main`.
+
 ## Deploy
 
 ```bash
